@@ -1,34 +1,30 @@
-import { feature } from 'bun:bundle'
-import type { PartialCompactDirection } from '../../types/message.js'
+# Claude Code 压缩提示词 (Compact Prompts)
 
-// Dead code elimination: conditional import for proactive mode
-/* eslint-disable @typescript-eslint/no-require-imports */
-const proactiveModule =
-  feature('PROACTIVE') || feature('KAIROS')
-    ? (require('../../proactive/index.js') as typeof import('../../proactive/index.js'))
-    : null
-/* eslint-enable @typescript-eslint/no-require-imports */
+> 当对话接近上下文窗口限制时，Claude Code 会自动触发压缩流程。系统使用一个独立的 LLM 调用来将已有对话总结为结构化摘要，从而释放上下文空间。以下是压缩流程中使用的所有提示词。
 
-// Aggressive no-tools preamble. The cache-sharing fork path inherits the
-// parent's full tool set (required for cache-key match), and on Sonnet 4.6+
-// adaptive-thinking models the model sometimes attempts a tool call despite
-// the weaker trailer instruction. With maxTurns: 1, a denied tool call means
-// no text output → falls through to the streaming fallback (2.79% on 4.6 vs
-// 0.01% on 4.5). Putting this FIRST and making it explicit about rejection
-// consequences prevents the wasted turn.
-const NO_TOOLS_PREAMBLE = `CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
+---
+
+## 1. 工具禁用前言 (No-Tools Preamble)
+
+> 注：强制分类器只输出纯文本，不调用任何工具。这段文本会被放在压缩提示词的最前面。
+
+```text
+CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
 
 - Do NOT use Read, Bash, Grep, Glob, Edit, Write, or ANY other tool.
 - You already have all the context you need in the conversation above.
-- Tool calls will be REJECTED and will waste your only turn — you will fail the task.
+- Tool calls will be REJECTED and will waste your only turn -- you will fail the task.
 - Your entire response must be plain text: an <analysis> block followed by a <summary> block.
+```
 
-`
+---
 
-// Two variants: BASE scopes to "the conversation", PARTIAL scopes to "the
-// recent messages". The <analysis> block is a drafting scratchpad that
-// formatCompactSummary() strips before the summary reaches context.
-const DETAILED_ANALYSIS_INSTRUCTION_BASE = `Before providing your final summary, wrap your analysis in <analysis> tags to organize your thoughts and ensure you've covered all necessary points. In your analysis process:
+## 2. 详细分析指令 - 全量压缩版 (Detailed Analysis Instruction - Base)
+
+> 注：指导模型在生成摘要前先进行结构化分析，适用于全量压缩（对整个对话进行总结）。
+
+```text
+Before providing your final summary, wrap your analysis in <analysis> tags to organize your thoughts and ensure you've covered all necessary points. In your analysis process:
 
 1. Chronologically analyze each message and section of the conversation. For each section thoroughly identify:
    - The user's explicit requests and intents
@@ -41,9 +37,17 @@ const DETAILED_ANALYSIS_INSTRUCTION_BASE = `Before providing your final summary,
      - file edits
    - Errors that you ran into and how you fixed them
    - Pay special attention to specific user feedback that you received, especially if the user told you to do something differently.
-2. Double-check for technical accuracy and completeness, addressing each required element thoroughly.`
+2. Double-check for technical accuracy and completeness, addressing each required element thoroughly.
+```
 
-const DETAILED_ANALYSIS_INSTRUCTION_PARTIAL = `Before providing your final summary, wrap your analysis in <analysis> tags to organize your thoughts and ensure you've covered all necessary points. In your analysis process:
+---
+
+## 3. 详细分析指令 - 部分压缩版 (Detailed Analysis Instruction - Partial)
+
+> 注：适用于部分压缩（只总结最近的消息，保留早期上下文）。
+
+```text
+Before providing your final summary, wrap your analysis in <analysis> tags to organize your thoughts and ensure you've covered all necessary points. In your analysis process:
 
 1. Analyze the recent messages chronologically. For each section thoroughly identify:
    - The user's explicit requests and intents
@@ -56,9 +60,17 @@ const DETAILED_ANALYSIS_INSTRUCTION_PARTIAL = `Before providing your final summa
      - file edits
    - Errors that you ran into and how you fixed them
    - Pay special attention to specific user feedback that you received, especially if the user told you to do something differently.
-2. Double-check for technical accuracy and completeness, addressing each required element thoroughly.`
+2. Double-check for technical accuracy and completeness, addressing each required element thoroughly.
+```
 
-const BASE_COMPACT_PROMPT = `Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
+---
+
+## 4. 全量压缩提示词 (Base Compact Prompt)
+
+> 注：对整个对话进行总结时使用的主提示词。
+
+```text
+Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
 This summary should be thorough in capturing technical details, code patterns, and architectural decisions that would be essential for continuing development work without losing context.
 
 ${DETAILED_ANALYSIS_INSTRUCTION_BASE}
@@ -140,9 +152,16 @@ When summarizing the conversation focus on typescript code changes and also reme
 # Summary instructions
 When you are using compact - please focus on test output and code changes. Include file reads verbatim.
 </example>
-`
+```
 
-const PARTIAL_COMPACT_PROMPT = `Your task is to create a detailed summary of the RECENT portion of the conversation — the messages that follow earlier retained context. The earlier messages are being kept intact and do NOT need to be summarized. Focus your summary on what was discussed, learned, and accomplished in the recent messages only.
+---
+
+## 5. 部分压缩提示词 - "from" 方向 (Partial Compact Prompt)
+
+> 注：只总结最近部分的消息，早期上下文保持不变。
+
+```text
+Your task is to create a detailed summary of the RECENT portion of the conversation -- the messages that follow earlier retained context. The earlier messages are being kept intact and do NOT need to be summarized. Focus your summary on what was discussed, learned, and accomplished in the recent messages only.
 
 ${DETAILED_ANALYSIS_INSTRUCTION_PARTIAL}
 
@@ -201,11 +220,16 @@ Here's an example of how your output should be structured:
 </example>
 
 Please provide your summary based on the RECENT messages only (after the retained earlier context), following this structure and ensuring precision and thoroughness in your response.
-`
+```
 
-// 'up_to': model sees only the summarized prefix (cache hit). Summary will
-// precede kept recent messages, hence "Context for Continuing Work" section.
-const PARTIAL_COMPACT_UP_TO_PROMPT = `Your task is to create a detailed summary of this conversation. This summary will be placed at the start of a continuing session; newer messages that build on this context will follow after your summary (you do not see them here). Summarize thoroughly so that someone reading only your summary and then the newer messages can fully understand what happened and continue the work.
+---
+
+## 6. 部分压缩提示词 - "up_to" 方向 (Partial Compact Up-To Prompt)
+
+> 注：总结前半部分对话，摘要会被放在继续会话的开头，后续更新的消息会紧跟其后。
+
+```text
+Your task is to create a detailed summary of this conversation. This summary will be placed at the start of a continuing session; newer messages that build on this context will follow after your summary (you do not see them here). Summarize thoroughly so that someone reading only your summary and then the newer messages can fully understand what happened and continue the work.
 
 ${DETAILED_ANALYSIS_INSTRUCTION_BASE}
 
@@ -264,111 +288,41 @@ Here's an example of how your output should be structured:
 </example>
 
 Please provide your summary following this structure, ensuring precision and thoroughness in your response.
-`
+```
 
-const NO_TOOLS_TRAILER =
-  '\n\nREMINDER: Do NOT call any tools. Respond with plain text only — ' +
-  'an <analysis> block followed by a <summary> block. ' +
-  'Tool calls will be rejected and you will fail the task.'
+---
 
-export function getPartialCompactPrompt(
-  customInstructions?: string,
-  direction: PartialCompactDirection = 'from',
-): string {
-  const template =
-    direction === 'up_to'
-      ? PARTIAL_COMPACT_UP_TO_PROMPT
-      : PARTIAL_COMPACT_PROMPT
-  let prompt = NO_TOOLS_PREAMBLE + template
+## 7. 工具禁用尾注 (No-Tools Trailer)
 
-  if (customInstructions && customInstructions.trim() !== '') {
-    prompt += `\n\nAdditional Instructions:\n${customInstructions}`
-  }
+> 注：追加在压缩提示词末尾的二次提醒。
 
-  prompt += NO_TOOLS_TRAILER
+```text
+REMINDER: Do NOT call any tools. Respond with plain text only -- an <analysis> block followed by a <summary> block. Tool calls will be rejected and you will fail the task.
+```
 
-  return prompt
-}
+---
 
-export function getCompactPrompt(customInstructions?: string): string {
-  let prompt = NO_TOOLS_PREAMBLE + BASE_COMPACT_PROMPT
+## 8. 提示词组装逻辑说明
 
-  if (customInstructions && customInstructions.trim() !== '') {
-    prompt += `\n\nAdditional Instructions:\n${customInstructions}`
-  }
+### 全量压缩 (`getCompactPrompt`)
 
-  prompt += NO_TOOLS_TRAILER
+组装顺序：
+1. `NO_TOOLS_PREAMBLE`（工具禁用前言）
+2. `BASE_COMPACT_PROMPT`（全量压缩主体）
+3. 如有自定义指令：`Additional Instructions:\n${customInstructions}`
+4. `NO_TOOLS_TRAILER`（工具禁用尾注）
 
-  return prompt
-}
+### 部分压缩 (`getPartialCompactPrompt`)
 
-/**
- * Formats the compact summary by stripping the <analysis> drafting scratchpad
- * and replacing <summary> XML tags with readable section headers.
- * @param summary The raw summary string potentially containing <analysis> and <summary> XML tags
- * @returns The formatted summary with analysis stripped and summary tags replaced by headers
- */
-export function formatCompactSummary(summary: string): string {
-  let formattedSummary = summary
+组装顺序：
+1. `NO_TOOLS_PREAMBLE`（工具禁用前言）
+2. `PARTIAL_COMPACT_PROMPT` 或 `PARTIAL_COMPACT_UP_TO_PROMPT`（根据方向选择）
+3. 如有自定义指令：`Additional Instructions:\n${customInstructions}`
+4. `NO_TOOLS_TRAILER`（工具禁用尾注）
 
-  // Strip analysis section — it's a drafting scratchpad that improves summary
-  // quality but has no informational value once the summary is written.
-  formattedSummary = formattedSummary.replace(
-    /<analysis>[\s\S]*?<\/analysis>/,
-    '',
-  )
+### 摘要格式化 (`formatCompactSummary`)
 
-  // Extract and format summary section
-  const summaryMatch = formattedSummary.match(/<summary>([\s\S]*?)<\/summary>/)
-  if (summaryMatch) {
-    const content = summaryMatch[1] || ''
-    formattedSummary = formattedSummary.replace(
-      /<summary>[\s\S]*?<\/summary>/,
-      `Summary:\n${content.trim()}`,
-    )
-  }
-
-  // Clean up extra whitespace between sections
-  formattedSummary = formattedSummary.replace(/\n\n+/g, '\n\n')
-
-  return formattedSummary.trim()
-}
-
-export function getCompactUserSummaryMessage(
-  summary: string,
-  suppressFollowUpQuestions?: boolean,
-  transcriptPath?: string,
-  recentMessagesPreserved?: boolean,
-): string {
-  const formattedSummary = formatCompactSummary(summary)
-
-  let baseSummary = `This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
-
-${formattedSummary}`
-
-  if (transcriptPath) {
-    baseSummary += `\n\nIf you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: ${transcriptPath}`
-  }
-
-  if (recentMessagesPreserved) {
-    baseSummary += `\n\nRecent messages are preserved verbatim.`
-  }
-
-  if (suppressFollowUpQuestions) {
-    let continuation = `${baseSummary}
-Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.`
-
-    if (
-      (feature('PROACTIVE') || feature('KAIROS')) &&
-      proactiveModule?.isProactiveActive()
-    ) {
-      continuation += `
-
-You are running in autonomous/proactive mode. This is NOT a first wake-up — you were already working autonomously before compaction. Continue your work loop: pick up where you left off based on the summary above. Do not greet the user or ask what to work on.`
-    }
-
-    return continuation
-  }
-
-  return baseSummary
-}
+后处理步骤：
+1. 移除 `<analysis>...</analysis>` 区块（这是思维草稿，最终不需要）
+2. 提取 `<summary>...</summary>` 内容，替换为 `Summary:\n` + 内容
+3. 清理多余空行
