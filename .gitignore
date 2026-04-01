@@ -1,0 +1,11 @@
+# 源码目录（不公开）
+claude-code-main/
+
+# 审查报告（内部使用）
+docs/00-审查报告.md
+
+# Claude Code 项目指令
+CLAUDE.md
+
+# 系统文件
+.DS_Store
