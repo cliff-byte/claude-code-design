@@ -123,6 +123,23 @@ Layer 5  基础设施      utils/ 331+ 文件 · permissions/ · tasks/
 
 建议阅读顺序：先读 08（设计哲学）建立全局认知，再按兴趣深入具体主题。
 
+## Prompt 提取
+
+从源码中提取的全部 prompt 文本位于 [`prompts/`](prompts/) 目录，共 8 个文件：
+
+| 文件 | 内容 |
+|------|------|
+| [system-prompts.md](prompts/system-prompts.md) | 系统提示词 — 角色定义、行为规范、工具指导等 24 个模块 |
+| [tool-prompts.md](prompts/tool-prompts.md) | 36 个工具的描述和使用指导 |
+| [agent-prompts.md](prompts/agent-prompts.md) | 6 个内置 Agent 的系统提示词 |
+| [compact-prompts.md](prompts/compact-prompts.md) | 上下文压缩的摘要生成指导 |
+| [memory-prompts.md](prompts/memory-prompts.md) | 记忆类型定义、自动提取、会话记忆更新 |
+| [classifier-prompts.md](prompts/classifier-prompts.md) | Auto 模式安全风险分类器 |
+| [summary-prompts.md](prompts/summary-prompts.md) | Agent 进度摘要和工具结果摘要 |
+| [magic-docs-prompts.md](prompts/magic-docs-prompts.md) | 自动文档更新的编辑规则 |
+
+所有 prompt 原文以代码块呈现，可直接阅读学习 Claude Code 的提示词工程。
+
 ## 分析方法
 
 - **工具**: Claude Code (claude-opus-4-6)
